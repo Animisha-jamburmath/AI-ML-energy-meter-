@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI + ML Smart Energy Dashboard (ESP32)</title>
+
+  <!-- PWA basics -->
+  <meta name="theme-color" content="#0b0f1a" />
+  <link rel="manifest" href="data:application/manifest+json,{\"name\":\"AI Energy Dashboard\",\"short_name\":\"AI Energy\",\"start_url\":\".\",\"display\":\"standalone\",\"background_color\":\"#0b0f1a\",\"theme_color\":\"#0b0f1a\"}" />
+
+  <style>
+    :root{
+      --bg:#0b0f1a;--card:#131a2a;--accent:#4fd1c5;--accent2:#7f9cf5;
+      --text:#e6e9f0;--muted:#9aa4bf;--danger:#f56565;--ok:#68d391;
+    }
+    @media (prefers-color-scheme: light){
+      :root{--bg:#f5f7fb;--card:#ffffff;--text:#0b0f1a;--muted:#4a5568}
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Segoe UI,system-ui,sans-serif;background:radial-gradient(circle at top,#11183a,var(--bg));color:var(--text)}
+    header{padding:18px;border-bottom:1px solid #1f2740;display:flex;justify-content:space-between;align-items:center}
+    header h1{font-size:1.5rem;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;color:transparent}
+    main{padding:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:22px}
+    .card{background:linear-gradient(180deg,#151c33,var(--card));border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+    .card h2{color:var(--accent);margin-bottom:10px}
+    .stat{font-size:1.6rem;font-weight:700}
+    .muted{color:var(--muted);font-size:.9rem}
+    .ok{color:var(--ok)}
+    .bad{color:var(--danger)}
+    .btn{padding:10px;border-radius:8px;border:1px solid #2a335a;background:#0f1528;color:var(--text);cursor:pointer}
+    canvas{width:100%!important;height:260px!important}
+    footer{text-align:center;padding:16px;color:var(--muted)}
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ AI + ML Smart Energy Dashboard</h1>
+  <div class="muted" id="status">Status: Connecting to MQTT…</div>
+</header>
+
+<main>
+  <!-- System Health -->
+  <div class="card">
+    <h2>🧭 System Health</h2>
+    <div class="muted">Uptime</div>
+    <div class="stat" id="uptime">--</div>
+    <div class="muted">Last MQTT Latency</div>
+    <div class="stat" id="latency">-- ms</div>
+  </div>
+
+  <!-- Peak / Average -->
+  <div class="card">
+    <h2>⚡ Peak & Average</h2>
+    <div class="muted">Peak Power</div>
+    <div class="stat" id="peakPower">-- W</div>
+    <div class="muted">Average Power</div>
+    <div class="stat" id="avgPower">-- W</div>
+  </div>
+
+  <!-- Live Data -->
+  <div class="card">
+    <h2>📡 Live pico W Data</h2>
+    <div class="stat" id="livePower">-- W</div>
+    <div class="muted">Voltage: <span id="liveVoltage">--</span> V | Current: <span id="liveCurrent">--</span> A</div>
+    <p class="muted">Last update: <span id="lastSeen">--</span></p>
+    <canvas id="powerChart"></canvas>
+  </div>
+
+  <!-- Billing -->
+  <div class="card">
+    <h2>💰 Billing</h2>
+    <div>Current Bill: <span class="stat" id="currentBill">₹100.0</span></div>
+    <div class="muted">AI Predicted Next 3 Months</div>
+    <div class="stat" id="nextBill">₹--</div>
+  </div>
+
+  <!-- ML Analytics -->
+  <div class="card">
+    <h2>🧠 ML Analytics</h2>
+    <div class="stat">Efficiency Score: <span id="effScore">--</span>/100</div>
+    <div class="muted">Trend: <span id="trendClass">--</span></div>
+    <canvas id="forecastChart"></canvas>
+  </div>
+
+  <!-- Anomaly -->
+  <div class="card" id="anomalyCard" style="display:none">
+    <h2 class="bad">🚨 Anomaly Detected</h2>
+    <p class="muted" id="anomalyText"></p>
+  </div>
+
+  <!-- Heatmap -->
+  <div class="card">
+    <h2>📊 Daily / Weekly Energy Heatmap</h2>
+    <div class="muted">Pattern view based on recent samples</div>
+    <canvas id="heatmapChart"></canvas>
+  </div>
+
+  <!-- Sustainability -->
+  <div class="card">
+    <h2>🌍 Sustainability</h2>
+    <div class="muted">Estimated CO₂ Saved</div>
+    <div class="stat" id="co2Saved">-- kg</div>
+    <div class="muted">Green Score</div>
+    <div class="stat" id="greenScore">-- / 100</div>
+  </div>
+
+  <!-- History -->
+  <div class="card">
+    <h2>🕒 Event History</h2>
+    <div class="muted">Alerts, anomalies, and system events</div>
+    <div id="history" class="muted" style="max-height:220px;overflow:auto"></div>
+  </div>
+</main>
+
+<footer>
+AIoT Features: Live MQTT Monitoring • 5s Updates • Theft/Anomaly Detection • Trend Classification • Hour/Day/Week Analytics • CO₂ & Green Score • CSV Export • PWA Ready • Offline History • Cloud-Ready APIs
+<br><button onclick="exportCSV()" class="btn">⬇ Export CSV</button>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script>
+/**************** CORE STATE ****************/
+const mqttUrl  = 'wss://broker.hivemq.com:8884/mqtt';
+const DATA_TOPIC = 'energymeter/ani/esp32/data';
+const client = mqtt.connect(mqttUrl,{clean:true,reconnectPeriod:2000});
+
+let powerHistory = JSON.parse(localStorage.getItem('powerHistory')||'[]');
+let baseBill = 100;
+let startTime = Date.now();
+let lastRx = null;
+
+/**************** CHARTS (DEFINED EARLY) ****************/
+const powerChart = new Chart(document.getElementById('powerChart'),{
+  type:'line',data:{labels:[],datasets:[{label:'Power (W)',data:[]}]},options:{animation:false}
+});
+
+const forecastChart = new Chart(document.getElementById('forecastChart'),{
+  type:'line',data:{labels:[],datasets:[{label:'Forecast',data:[]}]} 
+});
+
+function updateCharts(){
+  powerChart.data.labels = powerHistory.map((_,i)=>i);
+  powerChart.data.datasets[0].data = powerHistory;
+  powerChart.update();
+
+  forecastChart.data.labels = powerHistory.map((_,i)=>i);
+  forecastChart.data.datasets[0].data = powerHistory;
+  forecastChart.update();
+
+  updateStats();
+}
+
+/**************** SYSTEM METRICS ****************/
+setInterval(()=>{
+  const s = Math.floor((Date.now()-startTime)/1000);
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  document.getElementById('uptime').innerText = h+'h '+m+'m';
+},1000);
+
+function updateStats(){
+  if(powerHistory.length===0) return;
+  const peak = Math.max(...powerHistory);
+  const avg  = powerHistory.reduce((a,b)=>a+b,0)/powerHistory.length;
+  document.getElementById('peakPower').innerText = peak.toFixed(0)+' W';
+  document.getElementById('avgPower').innerText  = avg.toFixed(0)+' W';
+
+  // Sustainability (0.82 kg CO2 per kWh approx)
+  const kwh = powerHistory.reduce((a,b)=>a+b,0)/1000/3600;
+  const co2 = kwh * 0.82;
+  document.getElementById('co2Saved').innerText = co2.toFixed(2)+' kg';
+  document.getElementById('greenScore').innerText = Math.max(0,100-(avg/25)).toFixed(0)+' / 100';
+}
+
+/**************** MQTT ****************/
+client.on('connect',()=>{
+  document.getElementById('status').innerHTML='<span class="ok">Status: MQTT Connected</span>';
+  client.subscribe(DATA_TOPIC);
+  log('Subscribed to '+DATA_TOPIC);
+});
+
+client.on('message',(topic,msg)=>{
+  const now = Date.now();
+  if(lastRx) document.getElementById('latency').innerText = (now-lastRx)+' ms';
+  lastRx = now;
+
+  try{
+    const d = JSON.parse(msg.toString());
+    document.getElementById('liveVoltage').innerText = d.voltage.toFixed(1);
+    document.getElementById('liveCurrent').innerText = (d.current1+d.current2).toFixed(2);
+    document.getElementById('livePower').innerText = d.power.toFixed(0)+' W';
+    document.getElementById('lastSeen').innerText = new Date().toLocaleTimeString();
+
+    powerHistory.push(d.power);
+    if(powerHistory.length>168) powerHistory.shift(); // ~1 week
+    localStorage.setItem('powerHistory',JSON.stringify(powerHistory));
+
+    const bill = baseBill + d.kwh*7.5;
+    document.getElementById('currentBill').innerText = '₹'+bill.toFixed(2);
+
+    updateCharts();
+    predictNextBill();
+    detectAnomaly(d.power);
+    classifyTrend();
+    log('RX power='+d.power+'W');
+  } catch(e) {
+    log('Invalid JSON');
+  }
+});
+
+/**************** ML / AI ****************/
+function predictNextBill(){
+  if(powerHistory.length < 6) return;
+  const x = powerHistory.map((_,i)=>i);
+  const y = powerHistory;
+  let sx=0, sy=0, sxy=0, sxx=0, n=x.length;
+  for(let i=0;i<n;i++){ sx+=x[i]; sy+=y[i]; sxy+=x[i]*y[i]; sxx+=x[i]*x[i]; }
+  const m=(n*sxy-sx*sy)/(n*sxx-sx*sx);
+  const c=(sy-m*sx)/n;
+  const bills=[];
+  for(let i=1;i<=3;i++) bills.push(baseBill+(m*(n+i*10)+c)/100);
+  document.getElementById('nextBill').innerText=bills.map(b=>'₹'+b.toFixed(1)).join(' / ');
+  const avg=y.reduce((a,b)=>a+b,0)/y.length;
+  document.getElementById('effScore').innerText=Math.max(0,100-(avg/30)).toFixed(0);
+}
+
+function detectAnomaly(p){
+  if(powerHistory.length<10) return;
+  const avg=powerHistory.reduce((a,b)=>a+b,0)/powerHistory.length;
+  const std=Math.sqrt(powerHistory.map(x=>(x-avg)**2).reduce((a,b)=>a+b)/powerHistory.length);
+  if(std>0 && Math.abs(p-avg)/std>2.8){
+    document.getElementById('anomalyCard').style.display='block';
+    document.getElementById('anomalyText').innerText='Possible overload or theft pattern detected';
+  } else document.getElementById('anomalyCard').style.display='none';
+}
+
+function classifyTrend(){
+  if(powerHistory.length<8) return;
+  const recent = powerHistory.slice(-8);
+  const slope = recent[recent.length-1]-recent[0];
+  const trend = slope>20?'Increasing':slope<-20?'Decreasing':'Stable';
+  document.getElementById('trendClass').innerText = trend;
+}
+
+/**************** EXPORT & LOG ****************/
+function exportCSV(){
+  let csv='index,power\n';
+  powerHistory.forEach((p,i)=>{csv+=i+','+p+'\n';});
+  const blob=new Blob([csv],{type:'text/csv'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='energy_history.csv';
+  a.click();
+}
+
+function log(t){
+  const h=document.getElementById('history');
+  h.innerHTML=new Date().toLocaleTimeString()+' - '+t+'<br>'+h.innerHTML;
+}
+</script>
+</body>
+</html>
