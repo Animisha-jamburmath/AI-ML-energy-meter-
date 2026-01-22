@@ -41,16 +41,14 @@
 </header>
 
 <main>
-  <!-- System Health -->
   <div class="card">
     <h2>🧭 System Health</h2>
     <div class="muted">Uptime</div>
     <div class="stat" id="uptime">--</div>
-    <div class="muted">Last MQTT Latency</div>
+    <div class="muted">MQTT Latency</div>
     <div class="stat" id="latency">-- ms</div>
   </div>
 
-  <!-- Peak / Average -->
   <div class="card">
     <h2>⚡ Peak & Average</h2>
     <div class="muted">Peak Power</div>
@@ -59,16 +57,14 @@
     <div class="stat" id="avgPower">-- W</div>
   </div>
 
-  <!-- Live Data -->
   <div class="card">
-    <h2>📡 Live pico W Data</h2>
+    <h2>📡 Live ESP32 Data</h2>
     <div class="stat" id="livePower">-- W</div>
     <div class="muted">Voltage: <span id="liveVoltage">--</span> V | Current: <span id="liveCurrent">--</span> A</div>
     <p class="muted">Last update: <span id="lastSeen">--</span></p>
     <canvas id="powerChart"></canvas>
   </div>
 
-  <!-- Billing -->
   <div class="card">
     <h2>💰 Billing</h2>
     <div>Current Bill: <span class="stat" id="currentBill">₹100.0</span></div>
@@ -76,7 +72,6 @@
     <div class="stat" id="nextBill">₹--</div>
   </div>
 
-  <!-- ML Analytics -->
   <div class="card">
     <h2>🧠 ML Analytics</h2>
     <div class="stat">Efficiency Score: <span id="effScore">--</span>/100</div>
@@ -84,20 +79,11 @@
     <canvas id="forecastChart"></canvas>
   </div>
 
-  <!-- Anomaly -->
   <div class="card" id="anomalyCard" style="display:none">
     <h2 class="bad">🚨 Anomaly Detected</h2>
     <p class="muted" id="anomalyText"></p>
   </div>
 
-  <!-- Heatmap -->
-  <div class="card">
-    <h2>📊 Daily / Weekly Energy Heatmap</h2>
-    <div class="muted">Pattern view based on recent samples</div>
-    <canvas id="heatmapChart"></canvas>
-  </div>
-
-  <!-- Sustainability -->
   <div class="card">
     <h2>🌍 Sustainability</h2>
     <div class="muted">Estimated CO₂ Saved</div>
@@ -106,33 +92,39 @@
     <div class="stat" id="greenScore">-- / 100</div>
   </div>
 
-  <!-- History -->
   <div class="card">
     <h2>🕒 Event History</h2>
-    <div class="muted">Alerts, anomalies, and system events</div>
     <div id="history" class="muted" style="max-height:220px;overflow:auto"></div>
   </div>
 </main>
 
 <footer>
-AIoT Features: Live MQTT Monitoring • 5s Updates • Theft/Anomaly Detection • Trend Classification • Hour/Day/Week Analytics • CO₂ & Green Score • CSV Export • PWA Ready • Offline History • Cloud-Ready APIs
+AIoT Features: Live MQTT Monitoring • Mobile Safe WSS • AI Analytics • Anomaly Detection • CSV Export • PWA Ready
 <br><button onclick="exportCSV()" class="btn">⬇ Export CSV</button>
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <script>
-/**************** CORE STATE ****************/
+/**************** MQTT (MOBILE SAFE) ****************/
 const mqttUrl  = 'wss://broker.hivemq.com:8884/mqtt';
 const DATA_TOPIC = 'energymeter/ani/esp32/data';
-const client = mqtt.connect(mqttUrl,{clean:true,reconnectPeriod:2000});
 
+const client = mqtt.connect(mqttUrl, {
+  clientId: 'web_' + Math.random().toString(16).substr(2, 8),
+  clean: true,
+  keepalive: 60,
+  reconnectPeriod: 3000,
+  connectTimeout: 10000
+});
+
+/**************** STATE ****************/
 let powerHistory = JSON.parse(localStorage.getItem('powerHistory')||'[]');
 let baseBill = 100;
 let startTime = Date.now();
 let lastRx = null;
 
-/**************** CHARTS (DEFINED EARLY) ****************/
+/**************** CHARTS ****************/
 const powerChart = new Chart(document.getElementById('powerChart'),{
   type:'line',data:{labels:[],datasets:[{label:'Power (W)',data:[]}]},options:{animation:false}
 });
@@ -168,18 +160,30 @@ function updateStats(){
   document.getElementById('peakPower').innerText = peak.toFixed(0)+' W';
   document.getElementById('avgPower').innerText  = avg.toFixed(0)+' W';
 
-  // Sustainability (0.82 kg CO2 per kWh approx)
   const kwh = powerHistory.reduce((a,b)=>a+b,0)/1000/3600;
   const co2 = kwh * 0.82;
   document.getElementById('co2Saved').innerText = co2.toFixed(2)+' kg';
   document.getElementById('greenScore').innerText = Math.max(0,100-(avg/25)).toFixed(0)+' / 100';
 }
 
-/**************** MQTT ****************/
+/**************** MQTT EVENTS ****************/
 client.on('connect',()=>{
-  document.getElementById('status').innerHTML='<span class="ok">Status: MQTT Connected</span>';
+  document.getElementById('status').innerHTML='<span class="ok">MQTT Connected</span>';
   client.subscribe(DATA_TOPIC);
   log('Subscribed to '+DATA_TOPIC);
+});
+
+client.on('reconnect',()=>{
+  document.getElementById('status').innerHTML='<span class="muted">Reconnecting…</span>';
+});
+
+client.on('offline',()=>{
+  document.getElementById('status').innerHTML='<span class="bad">MQTT Offline</span>';
+});
+
+client.on('error',(err)=>{
+  document.getElementById('status').innerHTML='<span class="bad">MQTT Error</span>';
+  console.error(err);
 });
 
 client.on('message',(topic,msg)=>{
@@ -195,7 +199,7 @@ client.on('message',(topic,msg)=>{
     document.getElementById('lastSeen').innerText = new Date().toLocaleTimeString();
 
     powerHistory.push(d.power);
-    if(powerHistory.length>168) powerHistory.shift(); // ~1 week
+    if(powerHistory.length>168) powerHistory.shift();
     localStorage.setItem('powerHistory',JSON.stringify(powerHistory));
 
     const bill = baseBill + d.kwh*7.5;
@@ -211,7 +215,7 @@ client.on('message',(topic,msg)=>{
   }
 });
 
-/**************** ML / AI ****************/
+/**************** AI / ML ****************/
 function predictNextBill(){
   if(powerHistory.length < 6) return;
   const x = powerHistory.map((_,i)=>i);
